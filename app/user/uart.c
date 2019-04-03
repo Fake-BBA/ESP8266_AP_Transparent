@@ -23,15 +23,12 @@
  */
 
 #include "ets_sys.h"
-#include "os_type.h"
 #include "osapi.h"
-#include "uart.h"
-#include "user_interface.h"
-#include "uart_register.h"
-#include "espconn.h"
+#include "driver/uart.h"
+#include "osapi.h"
+#include "driver/uart_register.h"
 #include "mem.h"
 #include "os_type.h"
-#include "espconn.h"		//网络接口相关
 
 // UartDev is defined and initialized in rom code.
 extern UartDevice    UartDev;
@@ -300,24 +297,16 @@ uart_recvTask(os_event_t *events)
         uint8 fifo_len = (READ_PERI_REG(UART_STATUS(UART0))>>UART_RXFIFO_CNT_S)&UART_RXFIFO_CNT;
         uint8 d_tmp = 0;
         uint8 idx=0;
-        uint8 rxbuff[1024];
-        //memset(rxbuff,0,1024);
+        uint8 rxbuff[1024]; //新建一个buff
         for(idx=0;idx<fifo_len;idx++) {
             //d_tmp = READ_PERI_REG(UART_FIFO(UART0)) & 0xFF;
-            //uart_tx_one_char(UART0, d_tmp);             //此处将收到的又发出去，在此处可加入自己要的做法，例如通过UDP发送
+            //uart_tx_one_char(UART0, d_tmp);
             rxbuff[idx]=READ_PERI_REG(UART_FIFO(UART0)) & 0xFF;
         }
-
-        extern  struct espconn AP_ptrespconn;
-        remot_info *Mpremot=NULL;
-        if (espconn_get_connection_info(&AP_ptrespconn, &Mpremot, 0) != 0)
-                os_printf("get_connection_info fail\n");               
-        else{
-            os_memcpy(AP_ptrespconn.proto.udp->remote_ip, Mpremot->remote_ip, 4);
-            AP_ptrespconn.proto.udp->remote_port = Mpremot->remote_port;
-            espconn_send(&AP_ptrespconn,rxbuff,fifo_len);	//发送包
-        }
+        extern struct espconn transparent_ptrespconn;
         
+        espconn_send(&transparent_ptrespconn,rxbuff,fifo_len);	//发送包
+
         WRITE_PERI_REG(UART_INT_CLR(UART0), UART_RXFIFO_FULL_INT_CLR|UART_RXFIFO_TOUT_INT_CLR);
         uart_rx_intr_enable(UART0);
     #endif

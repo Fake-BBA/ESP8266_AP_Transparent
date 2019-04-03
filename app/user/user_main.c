@@ -1,14 +1,18 @@
+/*
+ * ´Ë¹¤³ÌÓÉBBA(401131019@qq.com±àĞ´£¬ÓÃÒÔÍê³É¿Î³ÌÊµ¼ù
+ */
 #include "user_main.h"
-#include "uart.h"
+
+uint32 priv_param_start_sec;
 
 static const partition_item_t at_partition_table[] = {
-    { SYSTEM_PARTITION_BOOTLOADER, 						0x0, 												0x1000},	//bootå ä¸€ä¸ªæ‰‡åŒº
+    { SYSTEM_PARTITION_BOOTLOADER, 						0x0, 												0x1000},	//bootÕ¼Ò»¸öÉÈÇø
     { SYSTEM_PARTITION_OTA_1,   						0x1000, 											SYSTEM_PARTITION_OTA_SIZE},
     { SYSTEM_PARTITION_OTA_2,   						SYSTEM_PARTITION_OTA_2_ADDR, 						SYSTEM_PARTITION_OTA_SIZE},
-    { SYSTEM_PARTITION_RF_CAL,  						SYSTEM_PARTITION_RF_CAL_ADDR, 						0x1000},    //ç”¨äºç³»ç»Ÿè‡ªåŠ¨ä¿å­˜æ ¡æ­£åçš„RFå‚æ•°ï¼ˆ4KBï¼‰
-    { SYSTEM_PARTITION_PHY_DATA, 						SYSTEM_PARTITION_PHY_DATA_ADDR, 					0x1000},    //é»˜è®¤RFå‚æ•°åŒºï¼ˆ4KBï¼‰
-    { SYSTEM_PARTITION_SYSTEM_PARAMETER, 				SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR, 			0x3000},    //ç³»ç»Ÿå‚æ•°åŒºï¼ˆ12KBï¼‰
-    { SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM,             SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR,          0x1000},    //ç”¨æˆ·å‚æ•°ï¼Œå¯æ”¾åœ¨ä»»æ„æœªè¢«å ç”¨çš„Flash
+    { SYSTEM_PARTITION_RF_CAL,  						SYSTEM_PARTITION_RF_CAL_ADDR, 						0x1000},
+    { SYSTEM_PARTITION_PHY_DATA, 						SYSTEM_PARTITION_PHY_DATA_ADDR, 					0x1000},
+    { SYSTEM_PARTITION_SYSTEM_PARAMETER, 				SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR, 			0x3000},
+    { SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM,             SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR,          0x1000},
 };
 
 void ICACHE_FLASH_ATTR user_pre_init(void)
@@ -19,53 +23,74 @@ void ICACHE_FLASH_ATTR user_pre_init(void)
 	}
 }
 
-struct softap_config temp_AP_config;
 
-struct espconn AP_ptrespconn;	//UDP imformation struct
+ETSTimer connect_timer;	//¶¨Ê±Æ÷ÊÂ¼ş½á¹¹Ìå
 
+struct station_config temp_station_config;	//ÉèÖÃÂ·ÓÉÆ÷µÄĞÅÏ¢
+struct softap_config temp_AP_config;		//ÉèÖÃ×ÔÉíAPµÄĞÅÏ¢
+
+struct espconn transparent_ptrespconn;	//STATION UDP ÍøÂç½á¹¹Ìå£¬station Í¸Ã÷´«ÊäÓÃ
+struct espconn AP_ptrespconn;	//AP UDP imformation struct£¬AP ÉèÖÃĞÅÏ¢ÓÃ
+struct espconn AP_Transparent_ptrespconn;	//AP UDP Í¸Ã÷´«ÊäÓÃ
+
+remot_info *Mpremot=NULL;	//ÓÃÓÚÔİ´æUDPµÄÁ¬½ÓĞÅÏ¢
 /*
- * UDPæ¥æ”¶äº‹ä»¶
+ * UDP½ÓÊÕÊÂ¼ş
  */
+
 void ICACHE_FLASH_ATTR
-udp_event_recv(void *arg, char *pusrdata, unsigned short length)
+udp_event_recv_BBA_AP_TRANSPARENT(void *arg, char *pusrdata, unsigned short length)
 {
 	uart0_tx_buffer(pusrdata,length);
+
+	static bool bool_first=1;
+	if(bool_first)
+	{
+		bool_first=0;
+		if (espconn_get_connection_info(&transparent_ptrespconn, &Mpremot, 0) != 0)
+			os_printf("get_connection_info fail\n");
+		else{
+			os_memcpy(transparent_ptrespconn.proto.udp->remote_ip, Mpremot->remote_ip, 4);
+			transparent_ptrespconn.proto.udp->remote_port = Mpremot->remote_port;
+		}
+	}
     return;
 }
 
-
-
-void user_init(void)
+void ICACHE_FLASH_ATTR udp_init(struct espconn* p_ptrespconn,uint8 IP[],int local_port,void (*recv)(void *arg, char *pusrdata, unsigned short length))
 {
-    system_set_os_print (0);	//0å…³é—­ç³»ç»Ÿæ‰“å°
-	system_init_done_cb(system_init_done);	//æ³¨å†Œç³»ç»Ÿåˆå§‹åŒ–å®Œæˆå›è°ƒå‡½æ•°
-}
-
-void ICACHE_FLASH_ATTR system_init_done()
-{
-	os_printf("System init done\r\n");
-	//UART0 IO3 RX,IO1 TX,UART1 IO2 TX,IO8 RX
-	uart_init(1000000, BIT_RATE_115200);	//ä¸²å£åˆå§‹åŒ–,å…¶ä¸­åŒ…å«os_install_putc1å‡½æ•°
-    //os_install_putc1((void *)uart1_write_char);     //å°†æ‰“å°ç«¯å£æ”¹ä¸ºuart1
-	wifi_set_opmode(0x02);		//è®¾ç½®WiFiå·¥ä½œæ¨¡å¼ä¸ºAPå¹¶ä¿å­˜åˆ°Flash
-	AP_UDP_Init();	//ç”¨äºåœ¨ä»»ä½•æ—¶åˆ»éƒ½å¯å¯¹ESP8266è¿›è¡Œè®¾ç½®
-}
-
-void ICACHE_FLASH_ATTR udp_init(struct espconn* p_ptrespconn,int local_port)
-{
-	//åˆå§‹åŒ–UDP
+	//³õÊ¼»¯UDP
 	p_ptrespconn->type = ESPCONN_UDP;
 	p_ptrespconn->proto.udp = (esp_udp *)os_zalloc(sizeof(esp_udp));
+	memcpy(p_ptrespconn->proto.udp->local_ip,IP,4);
 	p_ptrespconn->proto.udp->local_port = local_port;
-	espconn_regist_recvcb(p_ptrespconn, udp_event_recv);
+	espconn_regist_recvcb(p_ptrespconn, recv);
 	espconn_create(p_ptrespconn);
 	os_printf("UDP init done\r\n");
 }
 
-void ICACHE_FLASH_ATTR
-AP_UDP_Init()
+void user_init(void)
 {
-	wifi_softap_get_config(&temp_AP_config);	//æŸ¥è¯¢APæ¥å£ä¿å­˜åœ¨Flashä¸­çš„é…ç½®
+	system_set_os_print (0);	//0¹Ø±ÕÏµÍ³´òÓ¡
+	system_init_done_cb(system_init_done);	//×¢²áÏµÍ³³õÊ¼»¯Íê³É»Øµ÷º¯Êı
+}
+
+#define LIGHT_PIN 2
+struct BBA_FlashData flashData;
+
+void ICACHE_FLASH_ATTR system_init_done()
+{
+	os_printf("System init done\r\n");
+	
+	uart_init(115200, BIT_RATE_115200);	//´®¿Ú³õÊ¼»¯
+
+	wifi_set_opmode(0x02);		//ÉèÖÃWiFi¹¤×÷Ä£Ê½ÎªAP²¢±£´æµ½Flash
+
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U,FUNC_GPIO2);	//Ñ¡ÔñÒı½Å¹¦ÄÜ
+	GPIO_OUTPUT_SET(LIGHT_PIN, 0);	//µÆÁÁ£¬±íÊ¾Î´Á¬½ÓÉÏAP
+	
+
+	wifi_softap_get_config(&temp_AP_config);	//²éÑ¯AP½Ó¿Ú±£´æÔÚFlashÖĞµÄÅäÖÃ
 	if(temp_AP_config.ssid[0]!='B')
 	{
 		os_memset(temp_AP_config.ssid, 0, 32);
@@ -78,5 +103,26 @@ AP_UDP_Init()
 		wifi_softap_set_config(&temp_AP_config);
 		os_printf("AP Set Sucess!");
 	}
-	udp_init(&AP_ptrespconn,1025);	//åˆå§‹åŒ–UDP
+
+	uint8 ip[4]={192,168,4,1};
+
+	udp_init(&transparent_ptrespconn,ip,1025,&udp_event_recv_BBA_AP_TRANSPARENT);	//³õÊ¼»¯UDP
+}
+
+void ICACHE_FLASH_ATTR Wifi_conned(void *arg)
+{
+	uint8 status;
+	struct ip_info stationIP;
+	static bool bool_connected=1;
+	uint8 ip[4];
+
+	status = wifi_station_get_connect_status();
+	if(status == STATION_GOT_IP)
+	{
+		GPIO_OUTPUT_SET(LIGHT_PIN, 1);		//Èç¹ûÁ¬½ÓÉÏ£¬ÔòµÆÃğ
+	}
+	else
+	{
+		GPIO_OUTPUT_SET(LIGHT_PIN, 0);
+	}
 }
